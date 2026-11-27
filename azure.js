@@ -92,7 +92,7 @@
     return new Blob([buf], { type: "audio/wav" });
   }
 
-  // 開始錄音並評分。onState("listening" | "processing")。說完停頓約 1.2 秒會自動結束。
+  // 開始錄音並評分。onState("listening" | "processing")。說完停頓約 2 秒會自動結束。
   // 回傳評分結果，另外帶 audio（WAV Blob）讓你回放。
   async function assess(reference, onState) {
     const creds = getCreds();
@@ -106,7 +106,7 @@
       try {
         const sc = SDK.SpeechConfig.fromSubscription(creds.key, creds.region);
         sc.speechRecognitionLanguage = "en-US";
-        sc.setProperty(SDK.PropertyId.Speech_SegmentationSilenceTimeoutMs, "1200");
+        sc.setProperty(SDK.PropertyId.Speech_SegmentationSilenceTimeoutMs, "2000");
         push = SDK.AudioInputStream.createPushStream(SDK.AudioStreamFormat.getWaveFormatPCM(16000, 16, 1));
         const ac = SDK.AudioConfig.fromStreamInput(push);
         const pac = new SDK.PronunciationAssessmentConfig(reference, SDK.PronunciationAssessmentGradingSystem.HundredMark, SDK.PronunciationAssessmentGranularity.Phoneme, true);

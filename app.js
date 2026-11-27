@@ -169,7 +169,7 @@ function drawSheet() {
   else body = `<div class="cat-l" style="color:${c ? c.color : "var(--blue)"}">${esc(c ? c.zh : "我的情境")}</div>
     <div class="target${it.word ? " word" : ""}">${esc(it.t)}</div>${it.ipa ? `<p class="ipa"${it.word ? ' style="text-align:center"' : ""}>${esc(it.ipa)}</p>` : ""}
     <div class="listen"${it.word ? ' style="justify-content:center"' : ""}><button class="pill" data-say="0">${IC.spk}聽示範</button><button class="pill" data-say="1">${IC.slow}慢速</button></div>
-    ${st === "idle" ? (ses.hist && ses.hist.length ? histView(ses.hist) : `<div class="hint">先聽一次，再按下面的麥克風唸出來。唸完停一下，會自動結束並評分。你的聲音會存下來，之後可以跟示範對照。</div>`) : ""}
+    ${st === "idle" ? (ses.hist && ses.hist.length ? histView(ses.hist) : `<div class="hint">先聽一次，再按下面的麥克風唸出來。唸完整句後停兩秒會自動結束，或按麥克風結束。你的聲音會存下來，之後可以跟示範對照。</div>`) : ""}
     ${st === "error" ? `<div class="fix"><h4>${esc(ses.err.message)}</h4>${ses.err.code === "no_key" || ses.err.code === "bad_key" ? `<div class="row"><button class="pill" data-gotab="settings">去設定</button><button class="pill" data-demo="1">先用示範模式</button></div>` : ""}</div>` : ""}`;
   const micCls = st === "listening" ? "on" : st === "processing" ? "wait" : "";
   const status = { listening: "正在聽…唸完停一下", processing: "評分中…", result: "", idle: "", error: "" }[st];
@@ -200,7 +200,7 @@ function resultView(r, it) {
     detail = `<h2 style="margin-top:14px">${esc(w.w)} <span class="badge ${cls(w.score)}">${w.score}</span></h2>${errNote ? `<p class="mute">${errNote}</p>` : ""}<div class="phrow">${phs}</div>${r.audio && w.t0 != null ? `<div class="row" style="display:flex;gap:8px;margin-bottom:6px"><button class="pill" data-mineword="${sel}">${IC.play2}我唸的「${esc(w.w)}」</button><button class="pill" data-sayw="${esc(w.w)}">${IC.spk}示範</button></div>` : ""}${fixes || `<div class="fix good-box"><h4>這個字每個音都過關</h4><p>點其他紅色或黃色的字看細節。</p></div>`}`;
   }
   const prosNote = s.pros != null && s.pros < 70 ? `<div class="fix" style="border-left-color:var(--mid)"><h4>語調 ${s.pros} 分：太平了</h4><p>${esc(TIPS["ə"].how)} 重音節拉長、音高一點，其他音節輕輕帶過。</p></div>` : "";
-  const cmp = r.audio ? `<div class="cmp"><button class="pill" data-mine>${IC.play2}我的</button><button class="pill" data-say="0">${IC.spk}示範</button><button class="pill" data-ab>${IC.ab}示範→我</button></div>` : "";
+  const cmp = r.audio ? `<div class="cmp"><button class="pill" data-mine>${IC.play2}我的整句</button><button class="pill" data-say="0">${IC.spk}示範整句</button><button class="pill" data-ab>${IC.ab}示範→我</button></div>` : "";
   return `${r.demo ? `<span class="demo">示範結果，不是你的聲音</span>` : ""}<div class="res-top">${ring}<div class="subs">${subs}</div></div>${cmp}
   <div class="words">${words}</div><p class="mute" style="margin:0">點任一個字看每個音的分數</p>${detail}${prosNote}
   ${r.heard && !r.demo ? `<p class="heard">Azure 聽到：${esc(r.heard)}</p>` : ""}
