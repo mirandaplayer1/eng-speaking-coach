@@ -141,3 +141,6 @@ input,select{font:16px "Noto Sans TC",sans-serif;padding:12px;border:1px solid v
 .ln-fix{margin:8px 0 0;font-size:14px;line-height:1.5}
 .vrow{display:flex;flex-direction:column;align-items:stretch;gap:2px}
 .vrow .del{align-self:flex-end}
+.paste{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+.paste h3{margin:0 0 6px;font:800 18px Nunito,"Noto Sans TC"}
+.paste textarea{width:100%;font:15px/1.5 "Noto Sans TC",sans-serif;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);margin-top:8px}

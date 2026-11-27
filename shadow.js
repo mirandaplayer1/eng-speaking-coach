@@ -1,8 +1,7 @@
 // Shadowing：YouTube 影片 + 逐句字幕。點一句重播那一句，錄自己跟讀，Azure 用那一句當標準評分。
-// 字幕直接用 YouTube 原字幕（/api/captions，Vercel 函式），沒有就顯示沒有。存在這台手機，同一支影片不會重抓。
+// 字幕：使用者貼上逐字稿（YouTube「顯示逐字稿」、SRT、VTT），解析時間點並合併成句子，存在這台手機。
 (function () {
-  const FN = "/api/captions";
-  const $ = s => document.querySelector(s);
+    const $ = s => document.querySelector(s);
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const cls = s => s >= 80 ? "g" : s >= 60 ? "m" : "b";
   const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
@@ -14,7 +13,7 @@
     loop: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12a6 6 0 0 1 6-6h8l-3-3M20 12a6 6 0 0 1-6 6H6l3 3"/></svg>'
   };
 
-  let V = null;      // { id, title, lines, more, next, loading, err }
+  let V = null;      // { id, title, lines, timed, err, editing }
   let player = null, ready = false, tick = null;
   let cur = -1;      // 現在這一句
   let stopAt = null; // 播到這裡暫停
@@ -25,21 +24,49 @@
 
   /* ---------- 字幕 ---------- */
   const cacheKey = id => "shadow-" + id;
-  async function fetchChunk() {
-    const v = V;
-    if (!v || v.loading || v.more === false) return;
-    v.loading = true; v.err = null; draw();
-    try {
-      const r = await fetch(FN + "?v=" + encodeURIComponent(v.id));
-      const j = await r.json().catch(() => ({}));
-      if (j.title) v.title = j.title;
-      if (!r.ok) { if (r.status === 404) v.none = true; throw new Error(j.error || (r.status === 404 && location.hostname.endsWith("github.io") ? "字幕服務在 Vercel 網址才有，請改用 Vercel 的網址開啟。" : "字幕抓取失敗（" + r.status + "）")); }
-      v.lines = j.lines || []; v.more = false; v.source = j.source;
-      store(cacheKey(v.id), { title: v.title, lines: v.lines, more: false, source: v.source });
-    } catch (e) { v.err = e.message || "字幕抓取失敗"; }
-    if (v.title) window.dispatchEvent(new CustomEvent("shadow-title", { detail: { id: v.id, title: v.title } }));
-    v.loading = false;
-    if (V === v) draw();
+  // 解析貼上的逐字稿：YouTube「顯示逐字稿」複製的內容、SRT、VTT 都可以。沒有時間點也行（只是不能點句重播）。
+  function toSec(t) { const p = t.replace(",", ".").split(":").map(Number); return p.reduce((a, x) => a * 60 + x, 0); }
+  function parseTranscript(raw) {
+    const TIME = /^(\d{1,2}:)?\d{1,2}:\d{2}([.,]\d+)?/;
+    const rows = String(raw || "").replace(/\r/g, "").split("\n").map(x => x.trim())
+      .filter(x => x && x !== "WEBVTT" && !/^\d+$/.test(x) && !/^\d+\s*(秒|分鐘|seconds?|minutes?|hours?)([,，、\s]*\d+\s*(秒|分鐘|seconds?|minutes?))*$/i.test(x) && !/^(NOTE|Kind:|Language:)/.test(x));
+    const cues = []; let pend = null;
+    for (const x of rows) {
+      const srt = x.match(/^((?:\d{1,2}:)?\d{1,2}:\d{2}[.,]\d+)\s*-->\s*((?:\d{1,2}:)?\d{1,2}:\d{2}[.,]\d+)/);
+      if (srt) { pend = { start: toSec(srt[1]), end: toSec(srt[2]), text: "" }; cues.push(pend); continue; }
+      const m = x.match(TIME);
+      if (m) { const rest = x.slice(m[0].length).trim(); pend = { start: toSec(m[0]), text: rest }; cues.push(pend); continue; }
+      const text = x.replace(/<[^>]+>/g, "").replace(/^\[.*\]$/, "");
+      if (!text) continue;
+      if (pend) pend.text = (pend.text + " " + text).trim(); else cues.push({ start: null, text });
+    }
+    const timed = cues.filter(c => c.start != null && c.text).length > 0;
+    let cs = cues.filter(c => c.text && (!timed || c.start != null));
+    if (!timed) cs = cs.flatMap(c => (c.text.match(/[^.?!]+[.?!]+["'”’)]?|[^.?!]+$/g) || [c.text]).map(t => ({ start: null, text: t.trim() })).filter(c => c.text));
+    // 合併成句子：遇到 . ? ! 斷；沒有標點的自動字幕就每 14 字斷
+    const punct = cs.some(c => /[.?!]["'”’)]?$/.test(c.text));
+    const out = []; let cur = null;
+    const wc = t => t.split(/\s+/).length, max = punct ? 22 : 14;
+    cs.forEach((c, i) => {
+      if (cur && wc(cur.text) + wc(c.text) > max) { cur.end = c.start; out.push(cur); cur = null; }
+      if (!cur) cur = { start: c.start, text: c.text }; else cur.text += " " + c.text;
+      if (punct && /[.?!]["'”’)]?$/.test(cur.text)) { cur.end = c.end ?? (cs[i + 1] ? cs[i + 1].start : null); out.push(cur); cur = null; }
+    });
+    if (cur) { const l = cs[cs.length - 1]; cur.end = l.end ?? (l.start != null ? l.start + 5 : null); out.push(cur); }
+    return out.map((l, i) => {
+      const next = out[i + 1] && out[i + 1].start;
+      let end = l.end != null ? l.end : next != null ? next : l.start != null ? l.start + 5 : null;
+      if (next != null && end > next + 0.3) end = next + 0.3;
+      return { start: l.start, end, text: l.text.replace(/\s+/g, " ").replace(/^./, c => c.toUpperCase()) };
+    }).filter(l => l.text.split(" ").length >= 1);
+  }
+  function saveTranscript() {
+    const lines = parseTranscript($("#tx").value);
+    if (!lines.length) { V.err = "看不懂這段內容，確定有貼上英文逐字稿嗎？"; return draw(); }
+    V.lines = lines; V.err = null; V.timed = lines.some(l => l.start != null); V.editing = false;
+    store(cacheKey(V.id), { title: V.title, lines: V.lines, timed: V.timed });
+    if (V.title) window.dispatchEvent(new CustomEvent("shadow-title", { detail: { id: V.id, title: V.title } }));
+    draw();
   }
 
   /* ---------- YouTube 播放器 ---------- */
@@ -68,13 +95,19 @@
       if (opt.loop && cur >= 0) { player.seekTo(V.lines[cur].start, true); return; }
       player.pauseVideo(); stopAt = null;
     }
+    if (!V.timed) return;
     const i = V.lines.findIndex((l, k) => t >= l.start - 0.05 && t < (V.lines[k + 1] ? V.lines[k + 1].start : l.end + 1));
     if (i >= 0 && i !== cur && stopAt == null) { cur = i; highlight(true); }
     // 自動暫停：連續播放時，每句播完停下來讓你跟讀（同一句只停一次）
     if (opt.pause && stopAt == null && cur >= 0 && pausedAt !== cur && player.getPlayerState() === 1 && t >= V.lines[cur].end) { pausedAt = cur; player.pauseVideo(); }
   }
   function playLine(i) {
-    if (!ready || !V.lines[i]) return;
+    if (!V.lines[i]) return;
+    if (!ready || V.lines[i].start == null) {   // 沒有時間點：用語音合成唸這句
+      cur = i; highlight(false);
+      try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(V.lines[i].text); u.lang = "en-US"; u.rate = opt.rate; speechSynthesis.speak(u); } catch (e) {}
+      return;
+    }
     try { speechSynthesis.cancel(); audio.pause(); } catch (e) {}
     cur = i; pausedAt = i; const l = V.lines[i];
     stopAt = l.end + 0.15;
@@ -102,16 +135,16 @@
   function origThenMine(i) {
     const r = rec[i]; if (!r || !r.result) return;
     playLine(i);
-    const l = V.lines[i], wait = (l.end - l.start + 0.6) * 1000 / opt.rate;
+    const l = V.lines[i], wait = l.start != null ? (l.end - l.start + 0.6) * 1000 / opt.rate : 400 * l.text.split(" ").length / opt.rate;
     setTimeout(() => playBlob(r.result.audio), wait);
   }
 
   /* ---------- 畫面 ---------- */
   function lineHtml(l, i) {
     const r = rec[i] || {}, on = i === cur;
-    let body = `<span class="ln-t">${clock(l.start)}</span><span class="ln-x">${esc(l.text)}</span>`;
+    let body = `<span class="ln-t">${l.start != null ? clock(l.start) : "第 " + (i + 1) + " 句"}</span><span class="ln-x">${esc(l.text)}</span>`;
     if (r.result) {
-      body = `<span class="ln-t">${clock(l.start)}</span><span class="ln-x">${r.result.words.map(w => `<b class="${w.err === "Omission" ? "b" : cls(w.score)}">${esc(w.w)}</b>`).join(" ")}</span>`;
+      body = `<span class="ln-t">${l.start != null ? clock(l.start) : "第 " + (i + 1) + " 句"}</span><span class="ln-x">${r.result.words.map(w => `<b class="${w.err === "Omission" ? "b" : cls(w.score)}">${esc(w.w)}</b>`).join(" ")}</span>`;
     }
     let act = "";
     if (on) {
@@ -138,15 +171,19 @@
   function draw() {
     const box = $("#lines"); if (!box || !V) return;
     $("#shtitle").textContent = V.title || "影片跟讀";
-    if (!V.lines.length) {
-      box.innerHTML = V.loading ? `<div class="hint">正在抓字幕…</div>`
-        : V.err ? `<div class="hint"><b class="err">${esc(V.err)}</b><br>${V.none ? "<br>影片還是可以看，只是不能逐句跟讀。" : `<br><button class="pill" data-retry style="margin-top:10px">再試一次</button>`}</div>`
-        : `<div class="hint">沒有字幕。</div>`;
+    if (!V.lines.length || V.editing) {
+      box.innerHTML = `<div class="paste">
+        <h3>貼上這支影片的英文逐字稿</h3>
+        <ol class="steps"><li>在電腦或 iPad 打開這支 YouTube 影片</li><li>按影片說明下方的「顯示逐字稿」</li><li>全選逐字稿（含時間）複製，貼到下面</li></ol>
+        <p class="mute">也可以貼 .srt 或 .vtt 字幕檔的內容。沒有時間點也能練，只是不能點句子跳到影片那一段。</p>
+        <textarea id="tx" rows="8" placeholder="0:01&#10;Hi everyone, welcome back.&#10;0:04&#10;Today we're talking about..."></textarea>
+        ${V.err ? `<p class="err">${esc(V.err)}</p>` : ""}
+        <div style="display:flex;gap:8px;margin-top:10px"><button class="big" data-txsave style="flex:1">產生逐句字幕</button>${V.lines.length ? `<button class="big secondary" data-txcancel style="flex:none;width:auto;padding:0 18px">取消</button>` : ""}</div>
+      </div>`;
       return;
     }
-    const SRC = { youtube: "字幕來源：YouTube 原字幕", "youtube-auto": "字幕來源：YouTube 自動字幕（沒有標點，依停頓切句）" };
-    box.innerHTML = (V.source ? `<p class="mute" style="margin:0 0 8px">${SRC[V.source] || ""}</p>` : "") + V.lines.map(lineHtml).join("") +
-      "";
+    box.innerHTML = V.lines.map(lineHtml).join("") +
+      `<p class="mute" style="text-align:center;margin:14px 0">${V.timed ? "" : "這份逐字稿沒有時間點，點句子不會跳到影片。"}<button class="del" data-txedit>重新貼逐字稿</button></p>`;
   }
   function opts() {
     return `<button class="chip" data-sopt="rate" aria-pressed="${opt.rate < 1}">慢速 0.75×</button>
@@ -156,7 +193,8 @@
 
   function open(v) {
     const cached = load(cacheKey(v.id), null);
-    V = { id: v.id, title: (cached && cached.title) || v.title || "", lines: cached ? cached.lines : [], more: cached ? cached.more : true, next: cached ? cached.next : 0, source: cached && cached.source, loading: false, err: null };
+    V = { id: v.id, title: (cached && cached.title) || v.title || "", lines: cached && cached.lines || [], timed: cached ? cached.timed !== false : true, err: null, editing: false };
+    if (!V.title) fetch("https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent("https://www.youtube.com/watch?v=" + v.id)).then(r => r.ok ? r.json() : null).then(j => { if (j && j.title && V && V.id === v.id) { V.title = j.title; $("#shtitle").textContent = j.title; window.dispatchEvent(new CustomEvent("shadow-title", { detail: { id: v.id, title: j.title } })); } }).catch(() => {});
     cur = -1; stopAt = null; pausedAt = -1; rec = {}; ready = false;
     const el = $("#shadow");
     el.innerHTML = `<div class="sh-top"><button class="x" data-sclose aria-label="關閉">×</button><b id="shtitle" class="sh-title"></b></div>
@@ -164,7 +202,6 @@
       <div class="sh-body" id="lines"></div>`;
     el.hidden = false; document.getElementById("tabs").hidden = true;
     draw(); mountPlayer();
-    if (!V.lines.length) fetchChunk();
   }
   function close() {
     clearInterval(tick); tick = null;
@@ -178,7 +215,9 @@
     const t = e.target.closest("button,[data-li]"); if (!t || !t.closest("#shadow")) return;
     const d = t.dataset;
     if ("sclose" in d) return close();
-    if ("retry" in d) { V.err = null; V.more = true; return fetchChunk(); }
+    if ("txsave" in d) return saveTranscript();
+    if ("txedit" in d) { V.editing = true; return draw(); }
+    if ("txcancel" in d) { V.editing = false; V.err = null; return draw(); }
     if (d.sopt) {
       if (d.sopt === "rate") { opt.rate = opt.rate < 1 ? 1 : .75; try { player.setPlaybackRate(opt.rate); } catch (e) {} }
       else opt[d.sopt] = !opt[d.sopt];

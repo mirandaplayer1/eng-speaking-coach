@@ -11,5 +11,4 @@ iPhone Safari 可用的英文發音練習工具。用 Azure Speech Pronunciation
 Azure 金鑰在「設定」頁輸入，只存在瀏覽器 localStorage，不會進到 repo。
 
 ## 影片跟讀（shadowing）
-- `shadow.js`：YouTube 播放器 + 逐句字幕，點句重播、每句停、循環、慢速，跟讀後用那一句評分
-- `api/captions.js`：Vercel 函式，抓 YouTube 原本的英文字幕並切成句子（沒有字幕就回 404，不用 AI）。要部署在 Vercel，GitHub Pages 沒有後端。
+- `shadow.js`：YouTube 播放器 + 逐句字幕（貼上逐字稿／SRT／VTT 自動切句），點句重播、每句停、循環、慢速，跟讀後用那一句評分
