@@ -12,6 +12,8 @@ const IC = {
   slow: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>',
   mic: '<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
   next: '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+  play2: '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 5l12 7-12 7z" fill="currentColor" stroke="none"/></svg>',
+  ab: '<svg viewBox="0 0 24 24"><path d="M4 7h13l-3-3M20 17H7l3 3"/></svg>',
   play: '<svg viewBox="0 0 24 24" fill="#fff"><circle cx="12" cy="12" r="11" fill="rgb(0 0 0/.45)"/><path d="M10 8l6 4-6 4z"/></svg>'
 };
 
@@ -27,9 +29,41 @@ function toast(t) { const d = document.createElement("div"); d.className = "toas
 let voice = null;
 function pickVoice() { const vs = speechSynthesis.getVoices(); voice = vs.find(v => /Samantha|Ava|Allison/.test(v.name) && /en-US/.test(v.lang)) || vs.find(v => v.lang === "en-US") || null; }
 try { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; } catch (e) {}
-function say(t, slow) {
-  try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(t); u.lang = "en-US"; if (voice) u.voice = voice; u.rate = (slow ? .7 : 1) * prefs.rate; speechSynthesis.speak(u); } catch (e) { toast("這台裝置不能播放示範語音"); }
+function say(t, slow, then) {
+  stopAudio();
+  try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(t); u.lang = "en-US"; if (voice) u.voice = voice; u.rate = (slow ? .7 : 1) * prefs.rate; if (then) u.onend = () => setTimeout(then, 350); speechSynthesis.speak(u); } catch (e) { toast("這台裝置不能播放示範語音"); }
 }
+
+/* ---------- 我的錄音：IndexedDB 保存，每句留最近 10 次 ---------- */
+const player = new Audio(); let playUrl = null, playEnd = null;
+player.addEventListener("timeupdate", () => { if (playEnd != null && player.currentTime >= playEnd) { player.pause(); playEnd = null; } });
+function stopAudio() { try { player.pause(); } catch (e) {} }
+function playBlob(blob, t0, t1) {
+  if (!blob) return toast("找不到這次錄音");
+  try { speechSynthesis.cancel(); } catch (e) {}
+  if (playUrl) URL.revokeObjectURL(playUrl);
+  playUrl = URL.createObjectURL(blob); player.src = playUrl;
+  const go = () => { if (t0 != null) player.currentTime = Math.max(0, t0 - .08); playEnd = t1 != null ? t1 + .12 : null; player.play().catch(() => toast("無法播放，請再按一次")); };
+  if (t0 != null) player.addEventListener("loadedmetadata", go, { once: true }); else go();
+  player.load && t0 != null && player.load();
+}
+let dbp = null;
+function db() {
+  if (!dbp) dbp = new Promise((res, rej) => { const q = indexedDB.open("coach", 1); q.onupgradeneeded = () => { const os = q.result.createObjectStore("recs", { keyPath: "id", autoIncrement: true }); os.createIndex("ref", "ref"); }; q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+  return dbp;
+}
+async function recsFor(ref) {
+  try { const d = await db(); return await new Promise(res => { const q = d.transaction("recs").objectStore("recs").index("ref").getAll(ref); q.onsuccess = () => res(q.result.sort((a, b) => b.ts - a.ts)); q.onerror = () => res([]); }); } catch (e) { return []; }
+}
+async function saveRec(r) {
+  try {
+    const d = await db(), rec = { ref: r.reference, ts: Date.now(), score: r.scores.pron, audio: r.audio, words: r.words.map(w => ({ w: w.w, t0: w.t0, t1: w.t1 })) };
+    await new Promise(res => { const tx = d.transaction("recs", "readwrite"); tx.objectStore("recs").add(rec); tx.oncomplete = res; tx.onerror = res; });
+    const all = await recsFor(r.reference);
+    if (all.length > 10) { const tx = d.transaction("recs", "readwrite"); all.slice(10).forEach(x => tx.objectStore("recs").delete(x.id)); }
+  } catch (e) { toast("錄音沒有存起來（瀏覽器儲存空間不足？）"); }
+}
+const fmtTime = ts => { const d = new Date(ts); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 
 /* ---------- 題目 ---------- */
 function weakest() {
@@ -123,9 +157,10 @@ function render() {
 /* ---------- 練習畫面 ---------- */
 function start(i) {
   ses = { items: itemsFor(S.cat, S.kind), i, state: "idle", result: null, sel: null };
-  $("#sheet").hidden = false; $("#tabs").hidden = true; drawSheet();
+  $("#sheet").hidden = false; $("#tabs").hidden = true; drawSheet(); loadHist();
 }
-function close() { Azure.cancel(); ses = null; $("#sheet").hidden = true; $("#tabs").hidden = false; render(); }
+async function loadHist() { if (!ses) return; const ref = ses.items[ses.i].t, h = await recsFor(ref); if (ses && ses.items[ses.i].t === ref && ses.state === "idle") { ses.hist = h; drawSheet(); } }
+function close() { Azure.cancel(); stopAudio(); ses = null; $("#sheet").hidden = true; $("#tabs").hidden = false; render(); }
 function drawSheet() {
   const it = ses.items[ses.i], c = it.cat ? catOf(it.cat) : null, st = ses.state;
   const prog = ses.items.map((x, k) => `<i class="${k < ses.i ? "done" : k === ses.i ? "on" : ""}"></i>`).join("");
@@ -134,7 +169,7 @@ function drawSheet() {
   else body = `<div class="cat-l" style="color:${c ? c.color : "var(--blue)"}">${esc(c ? c.zh : "我的情境")}</div>
     <div class="target${it.word ? " word" : ""}">${esc(it.t)}</div>${it.ipa ? `<p class="ipa"${it.word ? ' style="text-align:center"' : ""}>${esc(it.ipa)}</p>` : ""}
     <div class="listen"${it.word ? ' style="justify-content:center"' : ""}><button class="pill" data-say="0">${IC.spk}聽示範</button><button class="pill" data-say="1">${IC.slow}慢速</button></div>
-    ${st === "idle" ? `<div class="hint">先聽一次，再按下面的麥克風唸出來。唸完停一下，會自動結束並評分。</div>` : ""}
+    ${st === "idle" ? (ses.hist && ses.hist.length ? histView(ses.hist) : `<div class="hint">先聽一次，再按下面的麥克風唸出來。唸完停一下，會自動結束並評分。你的聲音會存下來，之後可以跟示範對照。</div>`) : ""}
     ${st === "error" ? `<div class="fix"><h4>${esc(ses.err.message)}</h4>${ses.err.code === "no_key" || ses.err.code === "bad_key" ? `<div class="row"><button class="pill" data-gotab="settings">去設定</button><button class="pill" data-demo="1">先用示範模式</button></div>` : ""}</div>` : ""}`;
   const micCls = st === "listening" ? "on" : st === "processing" ? "wait" : "";
   const status = { listening: "正在聽…唸完停一下", processing: "評分中…", result: "", idle: "", error: "" }[st];
@@ -159,15 +194,22 @@ function resultView(r, it) {
       const t = TIPS[p.p], like = p.nbest.find(n => n.p !== p.p && n.score > p.score);
       const cat = t && t.cat ? catOf(t.cat) : null, vq = cat && cat.videos[0];
       return `<div class="fix"><h4>/${esc(p.p)}/ ${esc(t ? t.n : "")} 只有 ${p.score} 分${like ? `，聽起來像 /${esc(like.p)}/${ZHUYIN[like.p] ? "（" + esc(ZHUYIN[like.p]) + "）" : ""}` : ""}</h4><p>${esc(t ? t.how : "放慢速度，跟著示範把這個音單獨唸三次，再放回單字裡。")}</p>
-      <div class="row"><button class="pill" data-sayw="${esc(w.w)}">${IC.spk}聽「${esc(w.w)}」</button>${vq ? `<a class="pill" style="text-decoration:none;color:inherit" href="${ytSearch(vq[1])}" target="_blank" rel="noopener">看教學影片 ›</a>` : ""}</div></div>`;
+      <div class="row"><button class="pill" data-sayw="${esc(w.w)}">${IC.spk}示範「${esc(w.w)}」</button>${vq ? `<a class="pill" style="text-decoration:none;color:inherit" href="${ytSearch(vq[1])}" target="_blank" rel="noopener">看教學影片 ›</a>` : ""}</div></div>`;
     }).join("");
     const errNote = w.err === "Omission" ? "這個字沒有被唸出來（漏掉了）。" : w.err === "Insertion" ? "多唸了這個字。" : w.prosody && w.prosody.Break && w.prosody.Break.ErrorTypes && w.prosody.Break.ErrorTypes.includes("UnexpectedBreak") ? "這個字前面停頓太久。" : "";
-    detail = `<h2 style="margin-top:14px">${esc(w.w)} <span class="badge ${cls(w.score)}">${w.score}</span></h2>${errNote ? `<p class="mute">${errNote}</p>` : ""}<div class="phrow">${phs}</div>${fixes || `<div class="fix good-box"><h4>這個字每個音都過關</h4><p>點其他紅色或黃色的字看細節。</p></div>`}`;
+    detail = `<h2 style="margin-top:14px">${esc(w.w)} <span class="badge ${cls(w.score)}">${w.score}</span></h2>${errNote ? `<p class="mute">${errNote}</p>` : ""}<div class="phrow">${phs}</div>${r.audio && w.t0 != null ? `<div class="row" style="display:flex;gap:8px;margin-bottom:6px"><button class="pill" data-mineword="${sel}">${IC.play2}我唸的「${esc(w.w)}」</button><button class="pill" data-sayw="${esc(w.w)}">${IC.spk}示範</button></div>` : ""}${fixes || `<div class="fix good-box"><h4>這個字每個音都過關</h4><p>點其他紅色或黃色的字看細節。</p></div>`}`;
   }
   const prosNote = s.pros != null && s.pros < 70 ? `<div class="fix" style="border-left-color:var(--mid)"><h4>語調 ${s.pros} 分：太平了</h4><p>${esc(TIPS["ə"].how)} 重音節拉長、音高一點，其他音節輕輕帶過。</p></div>` : "";
-  return `${r.demo ? `<span class="demo">示範結果，不是你的聲音</span>` : ""}<div class="res-top">${ring}<div class="subs">${subs}</div></div>
+  const cmp = r.audio ? `<div class="cmp"><button class="pill" data-mine>${IC.play2}我的</button><button class="pill" data-say="0">${IC.spk}示範</button><button class="pill" data-ab>${IC.ab}示範→我</button></div>` : "";
+  return `${r.demo ? `<span class="demo">示範結果，不是你的聲音</span>` : ""}<div class="res-top">${ring}<div class="subs">${subs}</div></div>${cmp}
   <div class="words">${words}</div><p class="mute" style="margin:0">點任一個字看每個音的分數</p>${detail}${prosNote}
-  ${r.heard && !r.demo ? `<p class="heard">Azure 聽到：${esc(r.heard)}</p>` : ""}`;
+  ${r.heard && !r.demo ? `<p class="heard">Azure 聽到：${esc(r.heard)}</p>` : ""}
+  ${ses.hist && ses.hist.length > 1 ? histView(ses.hist) : ""}`;
+}
+function histView(h) {
+  const first = h[h.length - 1].score, last = h[0].score, diff = last - first;
+  return `<h2>歷次錄音 <span class="mute" style="font-weight:500">${h.length > 1 ? (diff >= 0 ? "進步 +" + diff : "退步 " + diff) + " 分" : ""}</span></h2>
+  <div class="list">${h.map((x, k) => `<button class="item hist" data-rec="${k}"><span>${IC.play2} ${fmtTime(x.ts)}${k === 0 ? "（最新）" : ""}</span><em class="badge ${cls(x.score)}">${x.score}</em></button>`).join("")}</div>`;
 }
 function record(r) {
   const day = new Date().toISOString().slice(0, 10);
@@ -177,9 +219,10 @@ function record(r) {
   store("stats", stats);
 }
 function doRecord() {
-  if (ses.state === "listening") { Azure.cancel(); ses.state = "idle"; return drawSheet(); }
+  if (ses.state === "listening") { Azure.stop(); ses.state = "processing"; return drawSheet(); }
   if (ses.state === "processing") return;
   try { speechSynthesis.cancel(); } catch (e) {}
+  stopAudio();
   const ref = ses.items[ses.i].t;
   ses.sel = null;
   if (prefs.demo && !(Azure.getCreds() || {}).key) {
@@ -188,8 +231,8 @@ function doRecord() {
   }
   ses.state = "listening"; drawSheet();
   Azure.assess(ref, st => { if (ses) { ses.state = st; drawSheet(); } })
-    .then(r => { if (!ses) return; record(r); ses.result = r; ses.state = "result"; drawSheet(); })
-    .catch(e => { if (!ses) return; ses.err = e; ses.state = "error"; drawSheet(); });
+    .then(async r => { if (!ses) return; record(r); await saveRec(r); ses.hist = await recsFor(r.reference); ses.result = r; ses.state = "result"; drawSheet(); })
+    .catch(e => { if (!ses || e.code === "aborted") return; ses.err = e; ses.state = "error"; drawSheet(); });
 }
 
 /* ---------- 事件 ---------- */
@@ -224,11 +267,15 @@ document.addEventListener("click", e => {
   if ("close" in d) return close();
   if (d.say != null) return say(ses.items[ses.i].t, d.say === "1");
   if (d.sayw) return say(d.sayw, true);
+  if ("mine" in d) return playBlob(ses.result && ses.result.audio);
+  if ("ab" in d) return say(ses.items[ses.i].t, false, () => playBlob(ses.result && ses.result.audio));
+  if (d.mineword != null) { const w = ses.result.words[+d.mineword]; return playBlob(ses.result.audio, w.t0, w.t1); }
+  if (d.rec != null) { const x = ses.hist[+d.rec]; return playBlob(x && x.audio); }
   if (d.w != null) { ses.sel = +d.w; drawSheet(); return; }
   if (d.gotab) { close(); S.tab = d.gotab; render(); return; }
   if (d.demo) { prefs.demo = true; store("prefs", prefs); ses.state = "idle"; doRecord(); return; }
   if (t.id === "rec") return doRecord();
-  if (t.id === "nextq") { Azure.cancel(); if (ses.i + 1 >= ses.items.length) { toast("這組練完了"); return close(); } ses.i++; ses.state = "idle"; ses.result = null; drawSheet(); return; }
+  if (t.id === "nextq") { Azure.cancel(); if (ses.i + 1 >= ses.items.length) { toast("這組練完了"); return close(); } ses.i++; ses.state = "idle"; ses.result = null; ses.hist = null; stopAudio(); drawSheet(); loadHist(); return; }
 });
 document.addEventListener("change", e => {
   if (e.target.id === "rate") { prefs.rate = +e.target.value; store("prefs", prefs); }

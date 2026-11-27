@@ -118,3 +118,5 @@ input,select{font:16px "Noto Sans TC",sans-serif;padding:12px;border:1px solid v
 .steps li{margin-bottom:4px}
 .secondary{background:var(--card);color:var(--ink);border:1px solid var(--line);box-shadow:none}
 .toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 90px);transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:12px;font-size:14px;z-index:20;max-width:90vw}
+.cmp{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.hist span{display:flex;align-items:center;gap:8px;font-weight:700}
