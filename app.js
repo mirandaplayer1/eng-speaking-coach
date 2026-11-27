@@ -108,8 +108,8 @@ function vVideos() {
   let body;
   if (S.vcat === "mine") {
     body = `<div class="add"><input id="vurl" inputmode="url" placeholder="貼上 YouTube 連結" autocomplete="off"><button class="small" id="vadd">加入</button></div>
-    ${myVids.length ? `<div class="list">${myVids.map((v, i) => `<div><div class="frame" data-play="${i}">${v.playing ? `<iframe src="https://www.youtube-nocookie.com/embed/${esc(v.id)}?playsinline=1&autoplay=1&cc_load_policy=1&cc_lang_pref=en" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>` : `<img src="https://i.ytimg.com/vi/${esc(v.id)}/hqdefault.jpg" alt="" style="width:100%;height:100%;object-fit:cover"><span style="position:absolute;inset:0;display:grid;place-items:center">${IC.play.replace("<svg", '<svg width="56" height="56"')}</span>`}</div><div style="display:flex;justify-content:space-between;align-items:center"><span class="mute">${esc(v.note || "我的影片")}</span><button class="del" data-del="${i}">移除</button></div></div>`).join("")}</div>`
-      : `<div class="hint" style="text-align:center">還沒有影片。貼上一個有英文字幕的 YouTube 連結，就能在這裡邊看邊跟讀。</div>`}`;
+    ${myVids.length ? `<div class="list">${myVids.map((v, i) => `<div class="vrow"><button class="vcard" data-shadow="${i}" style="width:100%;text-align:left"><span class="thumb"><img src="https://i.ytimg.com/vi/${esc(v.id)}/mqdefault.jpg" alt="">${IC.play}</span><span><b>${esc(v.title || "YouTube 影片")}</b><small>${v.title ? "點開逐句跟讀" : "點開產生逐句字幕"}</small></span></button><button class="del" data-del="${i}">移除</button></div>`).join("")}</div>`
+      : `<div class="hint" style="text-align:center">還沒有影片。貼上一個英文 YouTube 連結，會自動產生逐句字幕，點一句就能跟讀並評分。</div>`}`;
   } else {
     const c = catOf(S.vcat);
     body = `<p class="mute" style="margin-top:0">${esc(c.what)}</p><div class="list">${c.videos.map(([t, q]) => `<a class="vcard" href="${ytSearch(q)}" target="_blank" rel="noopener"><span class="thumb" style="background:${c.color}"><b style="font:900 22px Nunito">${esc(c.name)}</b></span><span><b>${esc(t)}</b><small>在 YouTube 搜尋 ›</small></span></a>`).join("")}</div>
@@ -140,6 +140,12 @@ function vSettings() {
     <div class="field"><label for="region">Region</label><select id="region">${regions.map(([v, n]) => `<option value="${v}"${(c.region || "eastasia") === v ? " selected" : ""}>${n}</option>`).join("")}</select></div>
     <button class="big" id="savekey">儲存並測試</button>
     <p id="keymsg" style="margin:10px 0 0"></p>
+  </div>
+  <div class="hero" style="margin-top:14px">
+    <h3 style="font-size:20px">字幕通行碼</h3>
+    <p>影片跟讀的逐句字幕由你的 reader 後端產生，這個通行碼擋掉陌生人。</p>
+    <div class="field"><label for="spass">通行碼</label><input id="spass" type="password" autocomplete="off" value="${esc(load("shadow-pass", ""))}"></div>
+    <button class="big secondary" id="savepass">儲存</button>
   </div>
   <h2>還沒有金鑰？</h2>
   <ol class="steps"><li>到 portal.azure.com 登入，搜尋「Speech」並建立</li><li>定價層選 Free F0，區域選 East Asia</li><li>建好後點「Keys and Endpoint」，複製 KEY 1 和 Location</li></ol>
@@ -237,7 +243,7 @@ function doRecord() {
 
 /* ---------- 事件 ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("button,[data-play]"); if (!t) return;
+  const t = e.target.closest("button"); if (!t || t.closest("#shadow")) return;
   const d = t.dataset;
   if (d.tab) { S.tab = d.tab; render(); scrollTo(0, 0); return; }
   if (d.cat) { S.cat = d.cat; render(); return; }
@@ -246,13 +252,14 @@ document.addEventListener("click", e => {
   if (d.vcat) { S.vcat = d.vcat; render(); return; }
   if (d.gocat) { S.tab = "practice"; S.cat = d.gocat; S.kind = "sent"; render(); return; }
   if (d.weak != null) { if (d.weak) { S.tab = "practice"; S.cat = d.weak; render(); } return; }
-  if (d.play != null) { myVids.forEach((v, i) => v.playing = i === +d.play); render(); return; }
-  if (d.del != null) { myVids.splice(+d.del, 1); store("my-videos", myVids.map(({ playing, ...v }) => v)); render(); return; }
+  if (d.shadow != null) { const v = myVids[+d.shadow]; if (v) Shadow.open(v); return; }
+  if (d.del != null) { myVids.splice(+d.del, 1); store("my-videos", myVids); render(); return; }
   if (t.id === "vadd") {
     const u = $("#vurl").value.trim(), m = u.match(/(?:youtu\.be\/|v=|shorts\/|embed\/|live\/)([A-Za-z0-9_-]{11})/);
     if (!m) return toast("看不懂這個連結，請貼 YouTube 影片網址");
-    myVids.unshift({ id: m[1], note: "加入於 " + new Date().toLocaleDateString("zh-TW") }); store("my-videos", myVids.map(({ playing, ...v }) => v)); render(); return;
+    if (!myVids.some(v => v.id === m[1])) myVids.unshift({ id: m[1], note: "加入於 " + new Date().toLocaleDateString("zh-TW") }); store("my-videos", myVids); render(); Shadow.open(myVids.find(v => v.id === m[1])); return;
   }
+  if (t.id === "savepass") { store("shadow-pass", $("#spass").value.trim()); toast("已儲存"); return; }
   if (t.id === "savekey") {
     const key = $("#key").value.trim(), region = $("#region").value, msg = $("#keymsg");
     if (!key) { Azure.setCreds(null); msg.textContent = "已清除金鑰"; msg.className = ""; return; }
@@ -283,6 +290,8 @@ document.addEventListener("change", e => {
 });
 document.addEventListener("keydown", e => { if (e.target.id === "vurl" && e.key === "Enter") $("#vadd").click(); });
 
+window.addEventListener("shadow-title", e => { const v = myVids.find(x => x.id === e.detail.id); if (v && e.detail.title && v.title !== e.detail.title) { v.title = e.detail.title; store("my-videos", myVids); if (S.tab === "videos") render(); } });
+window.addEventListener("shadow-scored", e => { record(e.detail); });
 if (!(Azure.getCreds() || {}).key && !prefs.demo) S.tab = "settings";
 render();
 })();

@@ -9,3 +9,7 @@ iPhone Safari 可用的英文發音練習工具。用 Azure Speech Pronunciation
 - `vendor/speech-sdk.min.js`：Microsoft Cognitive Services Speech SDK 1.40.0（MIT，見 `vendor/SPEECH-SDK-LICENSE`）
 
 Azure 金鑰在「設定」頁輸入，只存在瀏覽器 localStorage，不會進到 repo。
+
+## 影片跟讀（shadowing）
+- `shadow.js`：YouTube 播放器 + 逐句字幕，點句重播、每句停、循環、慢速，跟讀後用那一句評分
+- `supabase/functions/shadow/`：產生逐句字幕的 Edge Function（部署在 reader 專案，沿用 `GEMINI_API_KEY`，用 `SHADOW_PASS` 擋陌生人）
