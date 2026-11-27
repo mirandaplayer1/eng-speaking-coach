@@ -38,8 +38,8 @@
       if (j.title) v.title = j.title;
       const last = v.lines.length ? v.lines[v.lines.length - 1].start : -1;
       v.lines = v.lines.concat((j.lines || []).filter(l => l.start > last + 0.5));
-      v.more = !!j.more; v.next = j.to;
-      store(cacheKey(v.id), { title: v.title, lines: v.lines, more: v.more, next: v.next });
+      v.more = !!j.more; v.next = j.to; v.source = j.source || v.source;
+      store(cacheKey(v.id), { title: v.title, lines: v.lines, more: v.more, next: v.next, source: v.source });
       window.dispatchEvent(new CustomEvent("shadow-title", { detail: { id: v.id, title: v.title } }));
     } catch (e) { v.err = e.message || "字幕產生失敗"; }
     v.loading = false;
@@ -149,7 +149,8 @@
         : `<div class="hint">沒有字幕。</div>`;
       return;
     }
-    box.innerHTML = V.lines.map(lineHtml).join("") +
+    const SRC = { youtube: "字幕來源：YouTube 原字幕", "youtube-auto": "字幕來源：YouTube 自動字幕（沒有標點，依停頓切句）", gemini: "字幕來源：AI 轉寫（這支影片沒有可用的原字幕）" };
+    box.innerHTML = (V.source ? `<p class="mute" style="margin:0 0 8px">${SRC[V.source] || ""}</p>` : "") + V.lines.map(lineHtml).join("") +
       (V.loading ? `<div class="hint">載入後面的字幕中…</div>` : V.err ? `<div class="hint"><b class="err">${esc(V.err)}</b> <button class="pill" data-retry>再試一次</button></div>` : V.more ? `<button class="pill" data-retry style="margin:12px auto;display:flex">載入後面 5 分鐘</button>` : "");
   }
   function opts() {
@@ -160,7 +161,7 @@
 
   function open(v) {
     const cached = load(cacheKey(v.id), null);
-    V = { id: v.id, title: (cached && cached.title) || v.title || "", lines: cached ? cached.lines : [], more: cached ? cached.more : true, next: cached ? cached.next : 0, loading: false, err: null };
+    V = { id: v.id, title: (cached && cached.title) || v.title || "", lines: cached ? cached.lines : [], more: cached ? cached.more : true, next: cached ? cached.next : 0, source: cached && cached.source, loading: false, err: null };
     cur = -1; stopAt = null; pausedAt = -1; rec = {}; ready = false;
     const el = $("#shadow");
     el.innerHTML = `<div class="sh-top"><button class="x" data-sclose aria-label="關閉">×</button><b id="shtitle" class="sh-title"></b></div>

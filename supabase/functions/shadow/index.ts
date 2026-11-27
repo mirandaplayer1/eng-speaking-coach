@@ -2,7 +2,7 @@
 // 部署在 reader 專案，沿用它的 GEMINI_API_KEY。用 SHADOW_PASS 擋掉陌生人，免得別人花你的額度。
 //   POST { url, from?: 秒數 }  header: x-shadow-pass
 //   -> { video_id, title, channel, from, to, lines:[{start,end,text}], more }
-// 一次處理 5 分鐘，前端看到哪裡再要下一段。
+// 先抓 YouTube 原字幕（人工優先，其次自動字幕），一次給整支影片；抓不到才用 Gemini，一次 5 分鐘。
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type, x-shadow-pass, authorization, apikey",
@@ -35,6 +35,68 @@ const SCHEMA = {
   required: ["lines", "reached_end"],
 };
 
+/* ---------- 先試 YouTube 原字幕（免費、時間準）；抓不到才用 Gemini ---------- */
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+async function captionTracks(vid: string): Promise<any[]> {
+  // 1) 網頁版播放頁裡的 ytInitialPlayerResponse
+  try {
+    const r = await fetch(`https://www.youtube.com/watch?v=${vid}&hl=en`, { headers: { "user-agent": UA, "accept-language": "en-US,en;q=0.9", cookie: "CONSENT=YES+1" } });
+    const html = await r.text();
+    const m = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var\s|<\/script>)/s);
+    const tracks = m ? JSON.parse(m[1])?.captions?.playerCaptionsTracklistRenderer?.captionTracks : null;
+    if (Array.isArray(tracks) && tracks.length) return tracks;
+  } catch (_) { /* try next */ }
+  // 2) 行動版 App 的 player API
+  try {
+    const r = await fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
+      method: "POST", headers: { "content-type": "application/json", "user-agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 14) gzip" },
+      body: JSON.stringify({ videoId: vid, context: { client: { clientName: "ANDROID", clientVersion: "19.09.37", androidSdkVersion: 34, hl: "en" } } }),
+    });
+    const j = await r.json();
+    const tracks = j?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    if (Array.isArray(tracks) && tracks.length) return tracks;
+  } catch (_) { /* none */ }
+  return [];
+}
+type Line = { start: number; end: number; text: string };
+function cuesToLines(events: any[]): Line[] {
+  // 人工字幕：每個 cue 是一段文字，合併成完整句子（遇到 . ? ! 或太長就斷）
+  const cues = events.filter((e) => e.segs).map((e) => ({ start: e.tStartMs / 1000, end: (e.tStartMs + (e.dDurationMs || 0)) / 1000, text: e.segs.map((s: any) => s.utf8 || "").join("").replace(/\s+/g, " ").trim() })).filter((c) => c.text && !/^\[.*\]$/.test(c.text));
+  const out: Line[] = []; let cur: Line | null = null;
+  for (const c of cues) {
+    if (!cur) cur = { ...c }; else { cur.text += " " + c.text; cur.end = c.end; }
+    const words = cur.text.split(" ").length;
+    if (/[.?!]["'”’)]?$/.test(cur.text) || words >= 18 || cur.end - cur.start > 9) { out.push(cur); cur = null; }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+function asrToLines(events: any[]): Line[] {
+  // 自動字幕：逐字有時間但沒有標點，用停頓切句
+  const words: { t: number; w: string }[] = [];
+  for (const e of events) for (const s of e.segs || []) { const w = (s.utf8 || "").trim(); if (w && w !== "\n") words.push({ t: (e.tStartMs + (s.tOffsetMs || 0)) / 1000, w }); }
+  const out: Line[] = []; let cur: { start: number; ws: string[]; last: number } | null = null;
+  words.forEach((x, i) => {
+    const gap = cur ? x.t - cur.last : 0;
+    if (cur && (gap > 0.7 || cur.ws.length >= 14)) { out.push({ start: cur.start, end: cur.last + 0.4, text: cur.ws.join(" ") }); cur = null; }
+    if (!cur) cur = { start: x.t, ws: [], last: x.t };
+    cur.ws.push(x.w); cur.last = x.t;
+    if (i === words.length - 1) out.push({ start: cur.start, end: cur.last + 0.6, text: cur.ws.join(" ") });
+  });
+  return out.map((l) => ({ ...l, text: l.text.charAt(0).toUpperCase() + l.text.slice(1) }));
+}
+async function fromCaptions(vid: string): Promise<{ lines: Line[]; source: string } | null> {
+  const tracks = (await captionTracks(vid)).filter((t) => /^en/.test(t.languageCode || ""));
+  const pick = tracks.find((t) => t.kind !== "asr") || tracks.find((t) => t.kind === "asr");
+  if (!pick) return null;
+  const r = await fetch(pick.baseUrl + "&fmt=json3", { headers: { "user-agent": UA } });
+  const txt = await r.text();
+  if (!r.ok || !txt) return null;
+  const events = JSON.parse(txt).events || [];
+  const lines = (pick.kind === "asr" ? asrToLines(events) : cuesToLines(events)).map((l, i, a) => ({ start: Math.round(l.start * 10) / 10, end: Math.round(Math.min(l.end, a[i + 1] ? a[i + 1].start + 0.2 : l.end) * 10) / 10, text: l.text }));
+  return lines.length ? { lines, source: pick.kind === "asr" ? "youtube-auto" : "youtube" } : null;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const pass = Deno.env.get("SHADOW_PASS");
@@ -52,6 +114,13 @@ Deno.serve(async (req) => {
   let title = "", channel = "";
   if (!from) {
     try { const r = await fetch("https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent(url)); if (r.ok) { const j = await r.json(); title = j.title || ""; channel = j.author_name || ""; } } catch (_) { /* optional */ }
+  }
+
+  if (!from && body.engine !== "gemini") {
+    try {
+      const cap = await fromCaptions(vid);
+      if (cap) return json({ video_id: vid, title, channel, from: 0, to: null, lines: cap.lines, more: false, source: cap.source });
+    } catch (_) { /* 被擋或解析失敗：改用 Gemini */ }
   }
 
   const prompt =
@@ -84,5 +153,5 @@ Deno.serve(async (req) => {
     const end = Number.isFinite(l.end) && l.end > l.start ? Math.min(l.end, next + 0.3) : next;
     return { start: Math.round(l.start * 10) / 10, end: Math.round(end * 10) / 10, text: l.text };
   });
-  return json({ video_id: vid, title, channel, from, to, lines, more: !data.reached_end && lines.length > 0 });
+  return json({ video_id: vid, title, channel, from, to, lines, more: !data.reached_end && lines.length > 0, source: "gemini" });
 });
