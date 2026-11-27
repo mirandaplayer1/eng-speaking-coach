@@ -1,7 +1,7 @@
 // Shadowing：YouTube 影片 + 逐句字幕。點一句重播那一句，錄自己跟讀，Azure 用那一句當標準評分。
-// 字幕由 Supabase 函式 shadow 產生（Gemini 轉寫，含每句起訖秒數），存在這台手機，同一支影片不會重抓。
+// 字幕直接用 YouTube 原字幕（/api/captions，Vercel 函式），沒有就顯示沒有。存在這台手機，同一支影片不會重抓。
 (function () {
-  const FN = "https://azgtjxznqdppistljerl.supabase.co/functions/v1/shadow";
+  const FN = "/api/captions";
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const cls = s => s >= 80 ? "g" : s >= 60 ? "m" : "b";
@@ -28,20 +28,16 @@
   async function fetchChunk() {
     const v = V;
     if (!v || v.loading || v.more === false) return;
-    const pass = load("shadow-pass", "");
-    if (!pass) { v.err = "先到「設定」填字幕通行碼。"; draw(); return; }
     v.loading = true; v.err = null; draw();
     try {
-      const r = await fetch(FN, { method: "POST", headers: { "content-type": "application/json", "x-shadow-pass": pass }, body: JSON.stringify({ url: v.id, from: v.next || 0 }) });
+      const r = await fetch(FN + "?v=" + encodeURIComponent(v.id));
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || "字幕產生失敗（" + r.status + "）");
       if (j.title) v.title = j.title;
-      const last = v.lines.length ? v.lines[v.lines.length - 1].start : -1;
-      v.lines = v.lines.concat((j.lines || []).filter(l => l.start > last + 0.5));
-      v.more = !!j.more; v.next = j.to; v.source = j.source || v.source;
-      store(cacheKey(v.id), { title: v.title, lines: v.lines, more: v.more, next: v.next, source: v.source });
-      window.dispatchEvent(new CustomEvent("shadow-title", { detail: { id: v.id, title: v.title } }));
-    } catch (e) { v.err = e.message || "字幕產生失敗"; }
+      if (!r.ok) { if (r.status === 404) v.none = true; throw new Error(j.error || (r.status === 404 && location.hostname.endsWith("github.io") ? "字幕服務在 Vercel 網址才有，請改用 Vercel 的網址開啟。" : "字幕抓取失敗（" + r.status + "）")); }
+      v.lines = j.lines || []; v.more = false; v.source = j.source;
+      store(cacheKey(v.id), { title: v.title, lines: v.lines, more: false, source: v.source });
+    } catch (e) { v.err = e.message || "字幕抓取失敗"; }
+    if (v.title) window.dispatchEvent(new CustomEvent("shadow-title", { detail: { id: v.id, title: v.title } }));
     v.loading = false;
     if (V === v) draw();
   }
@@ -76,7 +72,6 @@
     if (i >= 0 && i !== cur && stopAt == null) { cur = i; highlight(true); }
     // 自動暫停：連續播放時，每句播完停下來讓你跟讀（同一句只停一次）
     if (opt.pause && stopAt == null && cur >= 0 && pausedAt !== cur && player.getPlayerState() === 1 && t >= V.lines[cur].end) { pausedAt = cur; player.pauseVideo(); }
-    if (V.more && !V.loading && V.lines.length && t > V.lines[V.lines.length - 1].start - 60) fetchChunk();
   }
   function playLine(i) {
     if (!ready || !V.lines[i]) return;
@@ -144,14 +139,14 @@
     const box = $("#lines"); if (!box || !V) return;
     $("#shtitle").textContent = V.title || "影片跟讀";
     if (!V.lines.length) {
-      box.innerHTML = V.loading ? `<div class="hint">正在產生逐句字幕，大約 20 到 60 秒…</div>`
-        : V.err ? `<div class="hint"><b class="err">${esc(V.err)}</b><br><button class="pill" data-retry style="margin-top:10px">再試一次</button></div>`
+      box.innerHTML = V.loading ? `<div class="hint">正在抓字幕…</div>`
+        : V.err ? `<div class="hint"><b class="err">${esc(V.err)}</b><br>${V.none ? "<br>影片還是可以看，只是不能逐句跟讀。" : `<br><button class="pill" data-retry style="margin-top:10px">再試一次</button>`}</div>`
         : `<div class="hint">沒有字幕。</div>`;
       return;
     }
-    const SRC = { youtube: "字幕來源：YouTube 原字幕", "youtube-auto": "字幕來源：YouTube 自動字幕（沒有標點，依停頓切句）", gemini: "字幕來源：AI 轉寫（這支影片沒有可用的原字幕）" };
+    const SRC = { youtube: "字幕來源：YouTube 原字幕", "youtube-auto": "字幕來源：YouTube 自動字幕（沒有標點，依停頓切句）" };
     box.innerHTML = (V.source ? `<p class="mute" style="margin:0 0 8px">${SRC[V.source] || ""}</p>` : "") + V.lines.map(lineHtml).join("") +
-      (V.loading ? `<div class="hint">載入後面的字幕中…</div>` : V.err ? `<div class="hint"><b class="err">${esc(V.err)}</b> <button class="pill" data-retry>再試一次</button></div>` : V.more ? `<button class="pill" data-retry style="margin:12px auto;display:flex">載入後面 5 分鐘</button>` : "");
+      "";
   }
   function opts() {
     return `<button class="chip" data-sopt="rate" aria-pressed="${opt.rate < 1}">慢速 0.75×</button>
@@ -183,7 +178,7 @@
     const t = e.target.closest("button,[data-li]"); if (!t || !t.closest("#shadow")) return;
     const d = t.dataset;
     if ("sclose" in d) return close();
-    if ("retry" in d) { V.err = null; return fetchChunk(); }
+    if ("retry" in d) { V.err = null; V.more = true; return fetchChunk(); }
     if (d.sopt) {
       if (d.sopt === "rate") { opt.rate = opt.rate < 1 ? 1 : .75; try { player.setPlaybackRate(opt.rate); } catch (e) {} }
       else opt[d.sopt] = !opt[d.sopt];

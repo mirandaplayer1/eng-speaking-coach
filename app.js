@@ -141,12 +141,6 @@ function vSettings() {
     <button class="big" id="savekey">儲存並測試</button>
     <p id="keymsg" style="margin:10px 0 0"></p>
   </div>
-  <div class="hero" style="margin-top:14px">
-    <h3 style="font-size:20px">字幕通行碼</h3>
-    <p>影片跟讀的逐句字幕由你的 reader 後端產生，這個通行碼擋掉陌生人。</p>
-    <div class="field"><label for="spass">通行碼</label><input id="spass" type="password" autocomplete="off" value="${esc(load("shadow-pass", ""))}"></div>
-    <button class="big secondary" id="savepass">儲存</button>
-  </div>
   <h2>還沒有金鑰？</h2>
   <ol class="steps"><li>到 portal.azure.com 登入，搜尋「Speech」並建立</li><li>定價層選 Free F0，區域選 East Asia</li><li>建好後點「Keys and Endpoint」，複製 KEY 1 和 Location</li></ol>
   <p class="mute">Free F0 每月 5 小時音訊免費，每天練 10 分鐘大約剛好。</p>
@@ -259,7 +253,6 @@ document.addEventListener("click", e => {
     if (!m) return toast("看不懂這個連結，請貼 YouTube 影片網址");
     if (!myVids.some(v => v.id === m[1])) myVids.unshift({ id: m[1], note: "加入於 " + new Date().toLocaleDateString("zh-TW") }); store("my-videos", myVids); render(); Shadow.open(myVids.find(v => v.id === m[1])); return;
   }
-  if (t.id === "savepass") { store("shadow-pass", $("#spass").value.trim()); toast("已儲存"); return; }
   if (t.id === "savekey") {
     const key = $("#key").value.trim(), region = $("#region").value, msg = $("#keymsg");
     if (!key) { Azure.setCreds(null); msg.textContent = "已清除金鑰"; msg.className = ""; return; }
