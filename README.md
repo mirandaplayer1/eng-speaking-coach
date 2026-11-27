@@ -11,4 +11,5 @@ iPhone Safari 可用的英文發音練習工具。用 Azure Speech Pronunciation
 Azure 金鑰在「設定」頁輸入，只存在瀏覽器 localStorage，不會進到 repo。
 
 ## 影片跟讀（shadowing）
+- `api/subs.js`：Vercel 函式，用 Gemini API 讀 YouTube 影片自動產生逐句字幕（一次 5 分鐘，CDN 快取一天）。要在 Vercel 設環境變數 `GEMINI_API_KEY`。
 - `shadow.js`：YouTube 播放器 + 逐句字幕（貼上逐字稿／SRT／VTT 自動切句），點句重播、每句停、循環、慢速，跟讀後用那一句評分

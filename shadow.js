@@ -1,5 +1,5 @@
 // Shadowing：YouTube 影片 + 逐句字幕。點一句重播那一句，錄自己跟讀，Azure 用那一句當標準評分。
-// 字幕：使用者貼上逐字稿（YouTube「顯示逐字稿」、SRT、VTT），解析時間點並合併成句子，存在這台手機。
+// 字幕：先用 /api/subs（Vercel 上的 Gemini 服務）自動產生；失敗或在 GitHub Pages 上就手動貼逐字稿（YouTube「顯示逐字稿」、SRT、VTT）。存在這台手機。
 (function () {
     const $ = s => document.querySelector(s);
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -60,11 +60,31 @@
       return { start: l.start, end, text: l.text.replace(/\s+/g, " ").replace(/^./, c => c.toUpperCase()) };
     }).filter(l => l.text.split(" ").length >= 1);
   }
+  // 自動產生：/api/subs（Vercel 上的 Gemini 服務），一次 5 分鐘。失敗就退回手動貼。
+  async function autoSubs() {
+    const v = V;
+    if (!v || v.loading || v.more === false || location.hostname.endsWith("github.io")) { if (v && !v.lines.length) v.editing = true; return v && draw(); }
+    v.loading = true; v.err = null; draw();
+    try {
+      const r = await fetch("/api/subs?v=" + encodeURIComponent(v.id) + "&from=" + (v.next || 0));
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "自動產生字幕失敗（" + r.status + "）");
+      if (j.title) v.title = j.title;
+      const last = v.lines.length ? v.lines[v.lines.length - 1].start : -1;
+      v.lines = v.lines.concat((j.lines || []).filter(l => l.start > last + 0.5));
+      v.more = !!j.more; v.next = j.to; v.timed = true; v.auto = true;
+      store(cacheKey(v.id), { title: v.title, lines: v.lines, timed: true, auto: true, more: v.more, next: v.next });
+      if (v.title) window.dispatchEvent(new CustomEvent("shadow-title", { detail: { id: v.id, title: v.title } }));
+    } catch (e) { v.err = e.message; if (!v.lines.length) v.editing = true; }
+    v.loading = false;
+    if (V === v) draw();
+  }
   function saveTranscript() {
     const lines = parseTranscript($("#tx").value);
     if (!lines.length) { V.err = "看不懂這段內容，確定有貼上英文逐字稿嗎？"; return draw(); }
     V.lines = lines; V.err = null; V.timed = lines.some(l => l.start != null); V.editing = false;
-    store(cacheKey(V.id), { title: V.title, lines: V.lines, timed: V.timed });
+    V.more = false; V.auto = false;
+    store(cacheKey(V.id), { title: V.title, lines: V.lines, timed: V.timed, more: false });
     if (V.title) window.dispatchEvent(new CustomEvent("shadow-title", { detail: { id: V.id, title: V.title } }));
     draw();
   }
@@ -96,6 +116,7 @@
       player.pauseVideo(); stopAt = null;
     }
     if (!V.timed) return;
+    if (V.auto && V.more && !V.loading && !V.err && V.lines.length && t > V.lines[V.lines.length - 1].start - 60) autoSubs();
     const i = V.lines.findIndex((l, k) => t >= l.start - 0.05 && t < (V.lines[k + 1] ? V.lines[k + 1].start : l.end + 1));
     if (i >= 0 && i !== cur && stopAt == null) { cur = i; highlight(true); }
     // 自動暫停：連續播放時，每句播完停下來讓你跟讀（同一句只停一次）
@@ -171,9 +192,10 @@
   function draw() {
     const box = $("#lines"); if (!box || !V) return;
     $("#shtitle").textContent = V.title || "影片跟讀";
+    if (!V.lines.length && V.loading) { box.innerHTML = `<div class="hint">正在自動產生逐句字幕，大約 20 到 60 秒…</div>`; return; }
     if (!V.lines.length || V.editing) {
       box.innerHTML = `<div class="paste">
-        <h3>貼上這支影片的英文逐字稿</h3>
+        <h3>${V.err ? "自動產生沒有成功，改用手動貼" : "貼上這支影片的英文逐字稿"}</h3>
         <ol class="steps"><li>在電腦或 iPad 打開這支 YouTube 影片</li><li>按影片說明下方的「顯示逐字稿」</li><li>全選逐字稿（含時間）複製，貼到下面</li></ol>
         <p class="mute">也可以貼 .srt 或 .vtt 字幕檔的內容。沒有時間點也能練，只是不能點句子跳到影片那一段。</p>
         <textarea id="tx" rows="8" placeholder="0:01&#10;Hi everyone, welcome back.&#10;0:04&#10;Today we're talking about..."></textarea>
@@ -183,6 +205,7 @@
       return;
     }
     box.innerHTML = V.lines.map(lineHtml).join("") +
+      (V.loading ? `<div class="hint">載入後面的字幕中…</div>` : V.auto && V.err ? `<div class="hint"><b class="err">${esc(V.err)}</b> <button class="pill" data-more>再試一次</button></div>` : V.auto && V.more ? `<button class="pill" data-more style="margin:12px auto;display:flex">載入後面 5 分鐘</button>` : "") +
       `<p class="mute" style="text-align:center;margin:14px 0">${V.timed ? "" : "這份逐字稿沒有時間點，點句子不會跳到影片。"}<button class="del" data-txedit>重新貼逐字稿</button></p>`;
   }
   function opts() {
@@ -193,7 +216,7 @@
 
   function open(v) {
     const cached = load(cacheKey(v.id), null);
-    V = { id: v.id, title: (cached && cached.title) || v.title || "", lines: cached && cached.lines || [], timed: cached ? cached.timed !== false : true, err: null, editing: false };
+    V = { id: v.id, title: (cached && cached.title) || v.title || "", lines: cached && cached.lines || [], timed: cached ? cached.timed !== false : true, auto: !!(cached && cached.auto), more: cached ? cached.more !== false && !!cached.auto : true, next: cached && cached.next || 0, err: null, editing: false, loading: false };
     if (!V.title) fetch("https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent("https://www.youtube.com/watch?v=" + v.id)).then(r => r.ok ? r.json() : null).then(j => { if (j && j.title && V && V.id === v.id) { V.title = j.title; $("#shtitle").textContent = j.title; window.dispatchEvent(new CustomEvent("shadow-title", { detail: { id: v.id, title: j.title } })); } }).catch(() => {});
     cur = -1; stopAt = null; pausedAt = -1; rec = {}; ready = false;
     const el = $("#shadow");
@@ -202,6 +225,7 @@
       <div class="sh-body" id="lines"></div>`;
     el.hidden = false; document.getElementById("tabs").hidden = true;
     draw(); mountPlayer();
+    if (!V.lines.length) autoSubs();
   }
   function close() {
     clearInterval(tick); tick = null;
@@ -217,6 +241,7 @@
     if ("sclose" in d) return close();
     if ("txsave" in d) return saveTranscript();
     if ("txedit" in d) { V.editing = true; return draw(); }
+    if ("more" in d) { V.err = null; return autoSubs(); }
     if ("txcancel" in d) { V.editing = false; V.err = null; return draw(); }
     if (d.sopt) {
       if (d.sopt === "rate") { opt.rate = opt.rate < 1 ? 1 : .75; try { player.setPlaybackRate(opt.rate); } catch (e) {} }
