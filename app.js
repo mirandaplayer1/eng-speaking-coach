@@ -57,7 +57,7 @@ async function recsFor(ref) {
 }
 async function saveRec(r) {
   try {
-    const d = await db(), rec = { ref: r.reference, ts: Date.now(), score: r.scores.pron, audio: r.audio, words: r.words.map(w => ({ w: w.w, t0: w.t0, t1: w.t1 })) };
+    const d = await db(), rec = { ref: r.reference, ts: Date.now(), score: r.scores.pron, audio: r.audio, words: r.words.map(w => ({ w: w.w, t0: w.t0, t1: w.t1 })), result: { reference: r.reference, heard: r.heard, scores: r.scores, words: r.words } };
     await new Promise(res => { const tx = d.transaction("recs", "readwrite"); tx.objectStore("recs").add(rec); tx.oncomplete = res; tx.onerror = res; });
     const all = await recsFor(r.reference);
     if (all.length > 10) { const tx = d.transaction("recs", "readwrite"); all.slice(10).forEach(x => tx.objectStore("recs").delete(x.id)); }
@@ -93,30 +93,23 @@ function vPractice() {
   const c = S.cat === "weak" ? { zh: "我的弱點", color: "#1c1c26", what: "從你分數最低的音挑題目：" + weakest().slice(0, 3).map(x => "/" + x.p + "/").join("、") } : catOf(S.cat);
   const items = itemsFor(S.cat, S.kind);
   const kinds = [["sent", "句子"], ["word", "單字"], ["scene", "我的情境"]];
-  return `<h1>練習</h1>${circles(list, S.cat, "cat")}
+  const banner = !(Azure.getCreds() || {}).key ? `<div class="banner">${prefs.demo ? "目前是<b>示範模式</b>：分數是假的，用來先看看怎麼用。" : "還沒設定 Azure 金鑰，錄音不能評分。"}<button class="pill" data-gotab="settings">設定金鑰 ›</button></div>` : "";
+  const vids = S.kind !== "scene" && c.videos ? `<div class="tvids">${c.videos.map(([t, q]) => `<a href="${ytSearch(q)}" target="_blank" rel="noopener">${IC.play}${esc(t)}</a>`).join("")}</div>` : "";
+  return `${banner}<h1>練習</h1>${circles(list, S.cat, "cat")}
   <div class="chips">${kinds.map(([k, n]) => `<button class="chip" data-kind="${k}" aria-pressed="${k === S.kind}">${n}</button>`).join("")}</div>
   <div class="hero"><div class="bar" style="background:${S.kind === "scene" ? "var(--blue)" : c.color}"></div>
     <h3>${S.kind === "scene" ? "創業者會用到的句子" : esc(c.zh)}</h3>
     <p>${S.kind === "scene" ? "自我介紹、約會議、點咖啡。重音和語調也會被評分。" : esc(c.what)}</p>
-    <button class="big" data-start="0">${IC.mic.replace("<svg", '<svg width="22" height="22" fill="none" stroke="#fff" stroke-width="2.2"')}開始 ${items.length} 題</button>
+    ${vids}<button class="big" data-start="0">${IC.mic.replace("<svg", '<svg width="22" height="22" fill="none" stroke="#fff" stroke-width="2.2"')}開始 ${items.length} 題</button>
   </div>
   <h2>題目</h2>
   <div class="list">${items.map((it, i) => { const s = stats.items[it.t]; return `<button class="item" data-start="${i}"><span>${esc(it.t)}</span><em class="badge ${cls(s)}">${s ?? "—"}</em></button>`; }).join("")}</div>`;
 }
 function vVideos() {
-  const list = [{ id: "mine", name: "+", zh: "My videos", color: "var(--blue)" }].concat(CATS);
-  let body;
-  if (S.vcat === "mine") {
-    body = `<div class="add"><input id="vurl" inputmode="url" placeholder="貼上 YouTube 連結" autocomplete="off"><button class="small" id="vadd">加入</button></div>
-    ${myVids.length ? `<div class="list">${myVids.map((v, i) => `<div class="vrow"><button class="vcard" data-shadow="${i}" style="width:100%;text-align:left"><span class="thumb"><img src="https://i.ytimg.com/vi/${esc(v.id)}/mqdefault.jpg" alt="">${IC.play}</span><span><b>${esc(v.title || "YouTube 影片")}</b><small>${v.title ? "點開逐句跟讀" : "點開產生逐句字幕"}</small></span></button><button class="del" data-del="${i}">移除</button></div>`).join("")}</div>`
-      : `<div class="hint" style="text-align:center">還沒有影片。貼上一個英文 YouTube 連結，會自動產生逐句字幕，點一句就能跟讀並評分。</div>`}`;
-  } else {
-    const c = catOf(S.vcat);
-    body = `<p class="mute" style="margin-top:0">${esc(c.what)}</p><div class="list">${c.videos.map(([t, q]) => `<a class="vcard" href="${ytSearch(q)}" target="_blank" rel="noopener"><span class="thumb" style="background:${c.color}"><b style="font:900 22px Nunito">${esc(c.name)}</b></span><span><b>${esc(t)}</b><small>在 YouTube 搜尋 ›</small></span></a>`).join("")}</div>
-    <p class="mute">找到好的影片，複製連結貼到 My videos 收藏。</p>
-    <button class="big secondary" data-gocat="${c.id}" style="margin-top:8px">練這類發音</button>`;
-  }
-  return `<h1>影片</h1>${circles(list, S.vcat, "vcat")}${body}`;
+  return `<h1>影片跟讀</h1>
+  <div class="add"><input id="vurl" inputmode="url" placeholder="貼上 YouTube 影片連結" autocomplete="off"><button class="small" id="vadd">加入</button></div>
+  ${myVids.length ? `<div class="list">${myVids.map((v, i) => `<div class="vrow"><button class="vcard" data-shadow="${i}" style="width:100%;text-align:left"><span class="thumb"><img src="https://i.ytimg.com/vi/${esc(v.id)}/mqdefault.jpg" alt="">${IC.play}</span><span><b>${esc(v.title || "YouTube 影片")}</b><small>${v.title ? "點開逐句跟讀" : "點開產生逐句字幕"}</small></span></button><button class="del" data-del="${i}">${v.sure ? "再按一次移除" : "移除"}</button></div>`).join("")}</div>`
+    : `<div class="hint" style="text-align:center">還沒有影片。貼上一個英文 YouTube 連結，會產生逐句字幕，點一句就能聽原聲、跟讀、評分。</div>`}`;
 }
 function vStats() {
   const days = Object.keys(stats.days).length, today = stats.days[new Date().toISOString().slice(0, 10)] || 0;
@@ -136,8 +129,8 @@ function vSettings() {
   <div class="hero">
     <h3 style="font-size:20px">Azure 語音金鑰</h3>
     <p>發音評分用 Azure Speech。金鑰只存在這台手機，不會上傳到任何地方。</p>
-    <div class="field"><label for="key">Key</label><input id="key" type="password" autocomplete="off" value="${esc(c.key || "")}" placeholder="貼上 KEY 1"></div>
-    <div class="field"><label for="region">Region</label><select id="region">${regions.map(([v, n]) => `<option value="${v}"${(c.region || "eastasia") === v ? " selected" : ""}>${n}</option>`).join("")}</select></div>
+    <div class="field"><label for="key">金鑰（Key）</label><input id="key" type="password" autocomplete="off" value="${esc(c.key || "")}" placeholder="貼上 KEY 1"></div>
+    <div class="field"><label for="region">區域（Region）</label><select id="region">${regions.map(([v, n]) => `<option value="${v}"${(c.region || "eastasia") === v ? " selected" : ""}>${n}</option>`).join("")}</select></div>
     <button class="big" id="savekey">儲存並測試</button>
     <p id="keymsg" style="margin:10px 0 0"></p>
   </div>
@@ -146,7 +139,7 @@ function vSettings() {
   <p class="mute">Free F0 每月 5 小時音訊免費，每天練 10 分鐘大約剛好。</p>
   <h2>其他</h2>
   <div class="field"><label for="rate">示範語速</label><select id="rate">${[[.8, "慢"], [1, "正常"], [1.15, "快"]].map(([v, n]) => `<option value="${v}"${prefs.rate == v ? " selected" : ""}>${n}</option>`).join("")}</select></div>
-  <label class="item" style="cursor:pointer"><span>示範模式（不用金鑰，看假的評分結果）</span><input type="checkbox" id="demo" style="width:24px;height:24px"${prefs.demo ? " checked" : ""}></label>
+  <label class="item" style="cursor:pointer"><span>示範模式（沒有金鑰時，用假的分數先試用）</span><input type="checkbox" id="demo" style="width:24px;height:24px"${prefs.demo ? " checked" : ""}></label>
   <button class="big secondary" id="reset" style="margin-top:14px">清除練習紀錄</button>`;
 }
 function render() {
@@ -165,7 +158,7 @@ function drawSheet() {
   const it = ses.items[ses.i], c = it.cat ? catOf(it.cat) : null, st = ses.state;
   const prog = ses.items.map((x, k) => `<i class="${k < ses.i ? "done" : k === ses.i ? "on" : ""}"></i>`).join("");
   let body;
-  if (st === "result") body = resultView(ses.result, it);
+  if (st === "result") body = `<p class="res-ref">${esc(it.t)}</p>` + resultView(ses.result, ses);
   else body = `<div class="cat-l" style="color:${c ? c.color : "var(--blue)"}">${esc(c ? c.zh : "我的情境")}</div>
     <div class="target${it.word ? " word" : ""}">${esc(it.t)}</div>${it.ipa ? `<p class="ipa"${it.word ? ' style="text-align:center"' : ""}>${esc(it.ipa)}</p>` : ""}
     <div class="listen"${it.word ? ' style="justify-content:center"' : ""}><button class="pill" data-say="0">${IC.spk}聽示範</button><button class="pill" data-say="1">${IC.slow}慢速</button></div>
@@ -175,15 +168,16 @@ function drawSheet() {
   const status = { listening: "正在聽…唸完停一下", processing: "評分中…", result: "", idle: "", error: "" }[st];
   $("#sheet").innerHTML = `<div class="sh-top"><button class="x" data-close aria-label="關閉">×</button><div class="prog">${prog}</div></div>
   <div class="sh-body">${body}</div>
-  <div class="sh-bot"><button class="side" data-say="0" aria-label="聽示範">${IC.spk}</button>
+  <div class="sh-bot"><button class="side" data-say="0" aria-label="聽示範">${IC.spk}<span>示範</span></button>
     <div><button class="mic ${micCls}" id="rec" aria-label="${st === "listening" ? "停止" : "錄音"}">${IC.mic}</button><div class="status">${status || (st === "result" ? "再錄一次" : "")}</div></div>
-    <button class="side" id="nextq" aria-label="下一題">${IC.next}</button></div>`;
+    <button class="side" id="nextq" aria-label="下一題">${IC.next}<span>下一題</span></button></div>`;
 }
-function resultView(r, it) {
+function resultView(r, st, lb) {
+  st = st || {}; lb = lb || { model: "示範" };
   const s = r.scores, R = 42, L = 2 * Math.PI * R;
   const ring = `<div class="ring"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="${R}" fill="none" stroke="var(--line)" stroke-width="10"/><circle cx="50" cy="50" r="${R}" fill="none" stroke="${col(s.pron)}" stroke-width="10" stroke-linecap="round" stroke-dasharray="${L * s.pron / 100} ${L}"/></svg><b style="color:${col(s.pron)}">${s.pron}</b></div>`;
   const subs = [["準確", s.acc], ["流暢", s.flu], ["完整", s.comp], ["語調", s.pros]].filter(x => x[1] != null).map(([n, v]) => `<div><span>${n}</span><b style="color:${col(v)}">${v}</b></div>`).join("");
-  const sel = ses.sel ?? r.words.reduce((m, w, k) => (w.score < r.words[m].score ? k : m), 0);
+  const sel = st.sel ?? r.words.reduce((m, w, k) => (w.score < r.words[m].score ? k : m), 0);
   const words = r.words.map((w, k) => `<button class="wd ${cls(w.err === "Omission" ? 0 : w.score)}${k === sel ? " sel" : ""}" data-w="${k}">${esc(w.w)}</button>`).join("");
   const w = r.words[sel];
   let detail = "";
@@ -200,11 +194,11 @@ function resultView(r, it) {
     detail = `<h2 style="margin-top:14px">${esc(w.w)} <span class="badge ${cls(w.score)}">${w.score}</span></h2>${errNote ? `<p class="mute">${errNote}</p>` : ""}<div class="phrow">${phs}</div>${r.audio && w.t0 != null ? `<div class="row" style="display:flex;gap:8px;margin-bottom:6px"><button class="pill" data-mineword="${sel}">${IC.play2}我唸的「${esc(w.w)}」</button><button class="pill" data-sayw="${esc(w.w)}">${IC.spk}示範</button></div>` : ""}${fixes || `<div class="fix good-box"><h4>這個字每個音都過關</h4><p>點其他紅色或黃色的字看細節。</p></div>`}`;
   }
   const prosNote = s.pros != null && s.pros < 70 ? `<div class="fix" style="border-left-color:var(--mid)"><h4>語調 ${s.pros} 分：太平了</h4><p>${esc(TIPS["ə"].how)} 重音節拉長、音高一點，其他音節輕輕帶過。</p></div>` : "";
-  const cmp = r.audio ? `<div class="cmp"><button class="pill" data-mine>${IC.play2}我的整句</button><button class="pill" data-say="0">${IC.spk}示範整句</button><button class="pill" data-ab>${IC.ab}示範→我</button></div>` : "";
+  const cmp = r.audio ? `<div class="cmp"><button class="pill" data-mine>${IC.play2}我的整句</button><button class="pill" data-say="0">${IC.spk}${lb.model}整句</button><button class="pill" data-ab>${IC.ab}${lb.model}→我</button></div>` : "";
   return `${r.demo ? `<span class="demo">示範結果，不是你的聲音</span>` : ""}<div class="res-top">${ring}<div class="subs">${subs}</div></div>${cmp}
   <div class="words">${words}</div><p class="mute" style="margin:0">點任一個字看每個音的分數</p>${detail}${prosNote}
   ${r.heard && !r.demo ? `<p class="heard">Azure 聽到：${esc(r.heard)}</p>` : ""}
-  ${ses.hist && ses.hist.length > 1 ? histView(ses.hist) : ""}`;
+  ${st.hist && st.hist.length ? histView(st.hist) : ""}`;
 }
 function histView(h) {
   const first = h[h.length - 1].score, last = h[0].score, diff = last - first;
@@ -243,11 +237,12 @@ document.addEventListener("click", e => {
   if (d.cat) { S.cat = d.cat; render(); return; }
   if (d.kind) { S.kind = d.kind; render(); return; }
   if (d.start != null) return start(+d.start);
+  if (d.gotab && !ses) { S.tab = d.gotab; render(); scrollTo(0, 0); return; }
   if (d.vcat) { S.vcat = d.vcat; render(); return; }
   if (d.gocat) { S.tab = "practice"; S.cat = d.gocat; S.kind = "sent"; render(); return; }
   if (d.weak != null) { if (d.weak) { S.tab = "practice"; S.cat = d.weak; render(); } return; }
   if (d.shadow != null) { const v = myVids[+d.shadow]; if (v) Shadow.open(v); return; }
-  if (d.del != null) { myVids.splice(+d.del, 1); store("my-videos", myVids); render(); return; }
+  if (d.del != null) { const v = myVids[+d.del]; if (!v.sure) { myVids.forEach(x => delete x.sure); v.sure = true; render(); return; } myVids.splice(+d.del, 1); myVids.forEach(x => delete x.sure); store("my-videos", myVids); render(); return; }
   if (t.id === "vadd") {
     const u = $("#vurl").value.trim(), m = u.match(/(?:youtu\.be\/|v=|shorts\/|embed\/|live\/)([A-Za-z0-9_-]{11})/);
     if (!m) return toast("看不懂這個連結，請貼 YouTube 影片網址");
@@ -258,7 +253,7 @@ document.addEventListener("click", e => {
     if (!key) { Azure.setCreds(null); msg.textContent = "已清除金鑰"; msg.className = ""; return; }
     Azure.setCreds({ key, region }); msg.textContent = "測試中…"; msg.className = "mute";
     fetch(`https://${region}.api.cognitive.microsoft.com/sts/v1.0/issueToken`, { method: "POST", headers: { "Ocp-Apim-Subscription-Key": key } })
-      .then(r => { if (r.ok) { msg.textContent = "可以用了！回到「練習」開始吧。"; msg.className = "ok"; } else { msg.textContent = "金鑰或區域不對（" + r.status + "）"; msg.className = "err"; } })
+      .then(r => { if (r.ok) { msg.innerHTML = '可以用了！ <button class="pill" data-gotab="practice">開始練習 ›</button>'; msg.className = "ok"; prefs.demo = false; store("prefs", prefs); } else { msg.textContent = "金鑰或區域不對（" + r.status + "）"; msg.className = "err"; } })
       .catch(() => { msg.textContent = "已儲存。無法在這裡測試，直接去練習試試看。"; msg.className = "mute"; });
     return;
   }
@@ -285,6 +280,8 @@ document.addEventListener("keydown", e => { if (e.target.id === "vurl" && e.key 
 
 window.addEventListener("shadow-title", e => { const v = myVids.find(x => x.id === e.detail.id); if (v && e.detail.title && v.title !== e.detail.title) { v.title = e.detail.title; store("my-videos", myVids); if (S.tab === "videos") render(); } });
 window.addEventListener("shadow-scored", e => { record(e.detail); });
-if (!(Azure.getCreds() || {}).key && !prefs.demo) S.tab = "settings";
+window.App = { resultView, histView, saveRec, recsFor, record, playBlob, stopAudio, say, toast, cls, isDemo: () => prefs.demo && !(Azure.getCreds() || {}).key, hasKey: () => !!(Azure.getCreds() || {}).key, goSettings: () => { S.tab = "settings"; render(); }, setDemo: v => { prefs.demo = v; store("prefs", prefs); } };
+// 第一次打開不再擋在設定頁：沒有金鑰就預設示範模式，首頁上方清楚標示
+if (!(Azure.getCreds() || {}).key && load("prefs", null) === null) { prefs.demo = true; store("prefs", prefs); }
 render();
 })();
