@@ -64,10 +64,29 @@
     const v = V;
     if (!v || v.loading || v.more === false || location.hostname.endsWith("github.io")) { if (v && !v.lines.length) v.editing = true; return v && draw(); }
     v.loading = true; v.err = null; draw();
+    // 第一步：影片原本就有的字幕（/api/captions）。有就直接用完整一份，不用再分段。
+    let capErr = null;
+    if (!v.lines.length && !v.next && !v.capTried) {
+      v.capTried = true;
+      try {
+        const r = await fetch("/api/captions?v=" + encodeURIComponent(v.id));
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.cues && j.cues.length) {
+          // 轉成「時間 + 句子」文字，交給同一套斷句邏輯合併成完整句子
+          const lines = parseTranscript(j.cues.map(c => `${Math.floor(c.start / 60)}:${(c.start % 60).toFixed(2).padStart(5, "0")}\n${c.text}`).join("\n"));
+          if (lines.length) {
+            Object.assign(v, { lines, more: false, next: 0, timed: true, auto: true, loading: false, src: "captions" });
+            store(cacheKey(v.id), { title: v.title, lines: v.lines, timed: true, auto: true, more: false, next: 0 });
+            if (V === v) draw(); return;
+          }
+        }
+        capErr = j.error || null;
+      } catch (e) { capErr = null; }
+    }
     try {
       const r = await fetch("/api/subs?v=" + encodeURIComponent(v.id) + "&from=" + (v.next || 0));
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || "自動產生字幕失敗（" + r.status + "）");
+      if (!r.ok) throw new Error(j.setup && capErr ? capErr + (/SUPADATA/.test(capErr) ? "" : "Gemini 也還沒設定。") : j.error || "自動產生字幕失敗（" + r.status + "）");
       if (j.title) v.title = j.title;
       const last = v.lines.length ? v.lines[v.lines.length - 1].start : -1;
       v.lines = v.lines.concat((j.lines || []).filter(l => l.start > last + 0.5));
